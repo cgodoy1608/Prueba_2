@@ -1,76 +1,79 @@
-from fastapi import FastAPI, HTTPException
-from typing import List, Optional
-import os
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import json
 
-app = FastAPI()
+HOST = "127.0.0.1"
+PORT = 8080
 
-campus = ["zona core", "campus uno", "campus matriz", "sector outsourcing"]
+devices = []
+file_name = "devices.json"
 
-@app.get("/")
-def read_root():
-    return {"message": "API para gestión de dispositivos en campus"}
+# Load devices from a file
+def load_devices():
+    try:
+        with open(file_name, "r") as file:
+            global devices
+            devices = json.load(file)
+    except FileNotFoundError:
+        devices = []
 
-@app.get("/campus/")
-def list_campuses():
-    return {"campuses": campus}
+# Save devices to a file
+def save_devices():
+    with open(file_name, "w") as file:
+        json.dump(devices, file)
 
-@app.get("/devices/{campus_id}")
-def view_devices(campus_id: int):
-    if 1 <= campus_id <= len(campus):
-        file_name = campus[campus_id - 1] + ".txt"
-        try:
-            with open(file_name, "r") as file:
-                devices = [line.strip() for line in file.readlines()]
-            return {"devices": devices}
-        except FileNotFoundError:
-            raise HTTPException(status_code=404, detail=f"No se encontró el archivo {file_name}")
-    else:
-        raise HTTPException(status_code=400, detail="ID de campus no válido")
-
-@app.post("/devices/{campus_id}")
-def add_device(
-    campus_id: int, 
-    device_type: str, 
-    device_name: str, 
-    hierarchy: str, 
-    ip_address: str, 
-    services: Optional[List[str]] = None
-):
-    if 1 <= campus_id <= len(campus):
-        file_name = campus[campus_id - 1] + ".txt"
-        services = services or []
-        with open(file_name, "a") as file:
-            file.write("\n---------------------------------\n")
-            file.write(f"Dispositivo: {device_type}\n")
-            file.write(f"Nombre: {device_name}\n")
-            file.write(f"Jerarquía: {hierarchy}\n")
-            file.write(f"IP: {ip_address}\n")
-            file.write(f"Servicios: {', '.join(services)}\n")
-            file.write("---------------------------------\n")
-        return {"message": "Dispositivo añadido con éxito"}
-    else:
-        raise HTTPException(status_code=400, detail="ID de campus no válido")
-
-@app.delete("/devices/{campus_id}")
-def delete_devices(campus_id: int):
-    if 1 <= campus_id <= len(campus):
-        file_name = campus[campus_id - 1] + ".txt"
-        if os.path.exists(file_name):
-            os.remove(file_name)
-            return {"message": f"Todos los dispositivos en {campus[campus_id - 1]} han sido borrados."}
+class DeviceHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/devices":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(devices).encode())
         else:
-            raise HTTPException(status_code=404, detail=f"No se encontró el archivo {file_name}")
-    else:
-        raise HTTPException(status_code=400, detail="ID de campus no válido")
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b"Endpoint no encontrado.")
 
-@app.delete("/campus/{campus_id}")
-def delete_campus(campus_id: int):
-    if 1 <= campus_id <= len(campus):
-        removed_campus = campus.pop(campus_id - 1)
-        return {"message": f"Campus '{removed_campus}' ha sido eliminado de la lista."}
-    else:
-        raise HTTPException(status_code=400, detail="ID de campus no válido")
+    def do_POST(self):
+        if self.path == "/devices":
+            content_length = int(self.headers["Content-Length"])
+            post_data = self.rfile.read(content_length)
+            try:
+                device = json.loads(post_data)
+                devices.append(device)
+                save_devices()
+                self.send_response(201)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"message": "Dispositivo añadido con éxito"}).encode())
+            except json.JSONDecodeError:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b"Error en el formato del JSON.")
+        else:
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b"Endpoint no encontrado.")
+
+    def do_DELETE(self):
+        if self.path.startswith("/devices/"):
+            ip_address = self.path.split("/")[-1]
+            global devices
+            devices = [d for d in devices if d["ip_address"] != ip_address]
+            save_devices()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"message": f"Dispositivo con IP {ip_address} eliminado."}).encode())
+        else:
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b"Endpoint no encontrado.")
+
+def run():
+    load_devices()
+    server = HTTPServer((HOST, PORT), DeviceHandler)
+    print(f"Servidor corriendo en http://{HOST}:{PORT}")
+    server.serve_forever()
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    run()
